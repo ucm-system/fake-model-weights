@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fake-model-weights"
+version = "0.2.0"
+description = "Generate fake model configs & weights with official layer distributions (for KV-cache architecture validation)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "ucm-system" }]
+keywords = ["kv-cache", "vllm", "ascend", "fake-weights", "hybrid-attention"]
+dependencies = []
+
+[project.optional-dependencies]
+hf = ["huggingface_hub>=0.20"]
+ms = ["modelscope>=1.16"]
+weight = ["torch", "safetensors"]
+all = ["huggingface_hub>=0.20", "modelscope>=1.16", "torch", "safetensors"]
+test = ["pytest"]
+
+[project.scripts]
+fake-model-weights = "fake_model_weights.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["fake_model_weights*"]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py"]
+testpaths = ["tests"]
