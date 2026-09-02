@@ -1,23 +1,23 @@
-"""层分布解析 + KV 组规划(全链式/快照/侧车)。
+"""层分布解析 + 注意力组规划(模型/引擎视角,与缓存系统解耦)。
 
 按官方 config 把每一层归为注意力/状态种类(full / mla / csa_c4 / csa_c128 /
-swa / kda / dsa …),并推导 UCM 规格表视角的 KV 组(chain/snapshot/sidecar、
-独立种子、storage_block_size、per_token_bytes 估算)。KV 形状字段纪律:
-hidden/heads/head_dim/lora ranks/sliding_window/compress_ratios/indexer 等
-只读不改,保证 vllm 的 KVCacheConfig 分组与真实模型一致。
+swa / kda / dsa …),并推导"注意力组"(与 vllm 的 KVCacheConfig 分组同构):
+组名、层索引、块大小、压缩比/窗口/索引器等引擎参数。
+
+KV 形状字段纪律: hidden/heads/head_dim/lora ranks/sliding_window/
+compress_ratios/indexer 等只读不改,保证 vllm 的 KVCacheConfig 分组与真实
+模型一致。
+
+注意: chain/snapshot/sidecar、seed、storage_block_size 是 **UCM 缓存系统的
+规格表语义**,不属于模型描述;如需这些行,请显式使用 ``views_ucm.py``
+(``--ucm-view``),本模块保持中立。
 """
 
 from __future__ import annotations
 
-import math
 from typing import Any, Dict, List, Optional
 
 # ------------------------------ 层分类 -------------------------------------
-
-KIND_CHAIN = "chain"
-KIND_SNAPSHOT = "snapshot"
-KIND_SIDECAR = "sidecar"
-KIND_NONE = "none"
 
 
 def text_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -85,7 +85,7 @@ def type_string(model_key: str, cfg: Dict[str, Any], n: Optional[int] = None) ->
     return ",".join(kinds)
 
 
-# ------------------------------ KV 组规划 -----------------------------------
+# ------------------------------ 注意力组规划 --------------------------------
 
 
 def _estimate_per_token_bytes(c: Dict[str, Any], kind: str) -> int:
@@ -100,55 +100,42 @@ def _estimate_per_token_bytes(c: Dict[str, Any], kind: str) -> int:
 
 
 def kv_group_plan(model_key: str, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """推导 UCM 规格表视角的 KV 组(不依赖层数缩减,按完整 config)。"""
+    """引擎/模型视角的注意力组(与 vllm KVCacheConfig 分组同构)。
+
+    每组只含引擎事实: 组名(类型)、层索引、块大小、压缩比/窗口/索引器等参数。
+    不含任何缓存系统的规格表语义(chain/snapshot/sidecar、seed、存储块等,
+    见 ``views_ucm``)。
+    """
     c = text_config(cfg)
     kinds = layer_types(model_key, cfg)
     groups: Dict[str, Dict[str, Any]] = {}
     lac = _v(c, "linear_attn_config") or {}
 
     for i, kind in enumerate(kinds):
-        gname = {
-            "full": "full",
-            "mla": "mla",
-            "csa_c4": "csa_c4",
-            "csa_c128": "csa_c128",
-            "swa": "swa",
-            "kda": "kda",
-            "dsa": "dsa",
-        }.get(kind)
-        if gname is None:
-            continue
         g = groups.setdefault(
-            gname,
+            kind,
             {
-                "name": gname,
-                "kind": KIND_CHAIN if gname not in ("kda",) else KIND_SNAPSHOT,
+                "name": kind,
                 "block_size": 128,
                 "layers": [],
-                "per_token_bytes": _estimate_per_token_bytes(c, gname),
-                "estimate": True,
             },
         )
         g["layers"].append(i)
-        if gname == "csa_c4":
+        if kind == "csa_c4":
             g["compress_ratio"] = 4
-            g["storage_block_size"] = 128 // 4
-        elif gname == "csa_c128":
+        elif kind == "csa_c128":
             g["compress_ratio"] = 128
-            g["storage_block_size"] = 128 // 128
-        elif gname == "swa":
+        elif kind == "swa":
             g["block_size"] = int(_v(c, "sliding_window", 128) or 128)
             g["sliding_window"] = g["block_size"]
 
-    # 索引器侧车: DSV4/GLM 的 CSA/DSA 层自带稀疏索引器缓存。
-    if kinds and any(k in kinds for k in ("csa_c4", "csa_c128", "dsa")):
+    # 稀疏索引器缓存(indexer.k_cache 是引擎真实存在的 KV 缓存张量)。
+    idx_layers = [i for i, k in enumerate(kinds) if k in ("csa_c4", "csa_c128", "dsa")]
+    if idx_layers:
         groups["indexer"] = {
             "name": "indexer",
-            "kind": KIND_SIDECAR,
             "block_size": 128,
-            "layers": [
-                i for i, k in enumerate(kinds) if k in ("csa_c4", "csa_c128", "dsa")
-            ],
+            "layers": idx_layers,
             "index_topk": int(_v(c, "index_topk", _v(lac, "index_topk", 512) or 512)),
             "params": {
                 "index_n_heads": _v(c, "index_n_heads", _v(lac, "index_n_heads", 64)),
@@ -158,7 +145,7 @@ def kv_group_plan(model_key: str, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             },
         }
 
-    # K3: MLA+KDA 共用字节页池。
+    # K3: MLA+KDA 共用字节页池(引擎分层事实)。
     if model_key == "kimi-k3":
         for g in groups.values():
             if g["name"] in ("mla", "kda"):
@@ -168,7 +155,6 @@ def kv_group_plan(model_key: str, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     if model_key == "deepseek-v4" and _v(c, "sliding_window"):
         groups["swa"] = {
             "name": "swa",
-            "kind": KIND_CHAIN,
             "block_size": int(_v(c, "sliding_window", 128) or 128),
             "layers": list(range(len(kinds))),
             "sliding_window": int(_v(c, "sliding_window", 128) or 128),
@@ -190,19 +176,14 @@ def layer_plan(
         "layers": len(kinds),
         "type_string": ",".join(kinds),
         "layer_plan": entries,
-        "kv_groups": kv_group_plan(model_key, cfg),
+        "attention_groups": kv_group_plan(model_key, cfg),
     }
 
 
 __all__ = [
-    "KIND_CHAIN",
-    "KIND_SNAPSHOT",
-    "KIND_SIDECAR",
-    "KIND_NONE",
     "text_config",
     "layer_types",
     "type_string",
     "kv_group_plan",
     "layer_plan",
-    "math",
 ]

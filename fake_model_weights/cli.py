@@ -50,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="权重清单只含 attention/KV 相关张量,不含 MLP/专家权重"
         "(纯 attention 层;结构验证用;vllm 主路径仍建议 --load-format dummy)",
     )
+    p.add_argument(
+        "--ucm-view",
+        action="store_true",
+        help="在 layer_plan 中附带 UCM 规格表投影(chain/snapshot/sidecar、seed、"
+        "storage_block_size)——缓存系统语义视图,默认不输出,核心与 UCM 解耦",
+    )
     p.add_argument("--out", default=None, help="输出目录(默认 fake-model-<out>/ 于当前目录)")
     p.add_argument(
         "--weights",
@@ -101,9 +107,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             print(f"model_key={model_key}  layers={plan['layers']}")
             print("type_string:", type_string(model_key, cfg, args.layers))
-            for g in plan["kv_groups"]:
+            for g in plan["attention_groups"]:
+                extra = ""
+                if args.ucm_view:
+                    kind = _ucm_kind_of(g["name"])
+                    extra = f" kind={kind}"
                 print(
-                    f"  group {g['name']:<10} kind={g['kind']:<8} "
+                    f"  group {g['name']:<10}{extra:<16} "
                     f"block={g.get('block_size')} layers={g['layers'][:6]}{'...' if len(g['layers'])>6 else ''}"
                 )
         return 0
@@ -130,6 +140,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     plan["layers"] = args.layers
     plan["type_string"] = type_string(model_key, cfg, args.layers)
     plan["layer_plan"] = plan["layer_plan"][: args.layers]
+    if args.ucm_view:
+        from .views_ucm import ucm_spec_table_view
+
+        plan["ucm_spec_table"] = ucm_spec_table_view(
+            model_key, cfg, plan["attention_groups"]
+        )
     (out / "layer_plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2))
 
     # 6) 可选: 生成 safetensors 权重
@@ -161,7 +177,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "source": src,
         "layers": args.layers,
         "type_string": plan["type_string"],
-        "kv_groups": [g["name"] for g in plan["kv_groups"]],
+        "attention_groups": [g["name"] for g in plan["attention_groups"]],
         "kv_shape_preserved": snap_ok,
         "out": str(out.resolve()),
         "weights": len(files) if files else None,
@@ -177,6 +193,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         for k, v in summary.items():
             print(f"{k}: {v}")
     return 0
+
+
+def _ucm_kind_of(group_name: str) -> str:
+    """--ucm-view 打印用的启发式 kind 映射(仅视图,不进入核心输出)。"""
+    if group_name == "kda":
+        return "snapshot"
+    if group_name == "indexer":
+        return "sidecar"
+    return "chain"
 
 
 def _detect_model_key(cfg: dict) -> str:

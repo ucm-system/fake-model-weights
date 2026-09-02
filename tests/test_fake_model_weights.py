@@ -93,14 +93,34 @@ class LayerPlanTest(unittest.TestCase):
             lp.type_string("glm-5.3", cfg, 8), "kda,kda,kda,dsa,kda,kda,kda,dsa"
         )
 
-    def test_dsv4_kv_groups(self):
+    def test_dsv4_attention_groups(self):
         cfg = _load("deepseek-v4.json")
         plan = lp.layer_plan("deepseek-v4", cfg)
-        names = {g["name"] for g in plan["kv_groups"]}
+        names = {g["name"] for g in plan["attention_groups"]}
         self.assertGreaterEqual(names, {"full", "csa_c4", "csa_c128", "swa", "indexer"})
-        by = {g["name"]: g for g in plan["kv_groups"]}
-        self.assertEqual(by["indexer"]["kind"], lp.KIND_SIDECAR)
+        by = {g["name"]: g for g in plan["attention_groups"]}
+        # 核心输出与 UCM 解耦: 注意力组不含 chain/snapshot/sidecar 等缓存语义。
+        for g in plan["attention_groups"]:
+            self.assertNotIn("kind", g)
+            self.assertNotIn("seed", g)
+            self.assertNotIn("storage_block_size", g)
         self.assertEqual(by["swa"]["sliding_window"], 128)
+        self.assertEqual(by["indexer"]["index_topk"], 512)
+
+    def test_ucm_view_projection(self):
+        from fake_model_weights import views_ucm
+
+        cfg = _load("deepseek-v4.json")
+        plan = lp.layer_plan("deepseek-v4", cfg)
+        rows = views_ucm.ucm_spec_table_view(
+            "deepseek-v4", cfg, plan["attention_groups"]
+        )
+        by = {r["group_name"]: r for r in rows}
+        self.assertEqual(by["indexer"]["kind"], views_ucm.KIND_SIDECAR)
+        self.assertEqual(by["full"]["kind"], views_ucm.KIND_CHAIN)
+        self.assertEqual(by["csa_c4"]["storage_block_size"], 32)
+        self.assertEqual(by["csa_c128"]["storage_block_size"], 1)
+        self.assertIn("seed", by["csa_c4"])
 
     def test_qwen36_pattern(self):
         cfg = _load("qwen3.6-27b.json")
@@ -223,7 +243,25 @@ class CliTest(unittest.TestCase):
             self.assertTrue((out / "layer_plan.json").exists())
             plan = json.loads((out / "layer_plan.json").read_text())
             self.assertEqual(plan["layers"], 8)
-            self.assertIn("kv_groups", plan)
+            self.assertIn("attention_groups", plan)
+            # 默认不含 UCM 投影
+            self.assertNotIn("ucm_spec_table", plan)
+
+    def test_local_with_ucm_view(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "src"
+            src.mkdir()
+            reduced = rd.reduce_config("deepseek-v4", _load("deepseek-v4.json"), 8)
+            (src / "config.json").write_text(json.dumps(reduced))
+            out = Path(d) / "out"
+            code = cli.main(
+                [str(src), "--layers", "8", "--out", str(out), "--ucm-view"]
+            )
+            self.assertEqual(code, 0)
+            plan = json.loads((out / "layer_plan.json").read_text())
+            self.assertIn("ucm_spec_table", plan)
+            kinds = {r["kind"] for r in plan["ucm_spec_table"]}
+            self.assertLessEqual(kinds, {"chain", "snapshot", "sidecar"})
 
     def test_local_with_safetensors_weights(self):
         with tempfile.TemporaryDirectory() as d:

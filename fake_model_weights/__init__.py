@@ -39,4 +39,4 @@ ranks/sliding_window/compress_ratios/indexer… 一字不改),把层数砍到 N 
    safetensors`` 读取(自定义架构参数名按启发式清单,以 ``--verify``/日志为准)。
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

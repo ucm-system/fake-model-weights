@@ -124,6 +124,27 @@ Kimi/K3 → `kimi-k3`；GLM/Bailing → `glm-5.3`；其余 → `generic`（全�
 | `dsa` | chain | 稀疏注意力（GLM） |
 | `indexer` | sidecar | 稀疏索引器（跟随源组，不参与命中投票） |
 
+## 与缓存系统解耦（v0.3.0）
+
+本工具**只描述模型/引擎视角**的结构：
+
+- 逐层注意力种类（full / mla / csa_c4 / csa_c128 / swa / kda / dsa）；
+- 注意力组（`attention_groups`：组名、层索引、块大小、压缩比/窗口/索引器参数，
+  与 vLLM 的 `KVCacheConfig` 分组同构）；
+- KV 相关形状（`config.json` 原样保留）。
+
+**不含任何缓存系统的规格表语义**——“chain / snapshot / sidecar”分类、`seed`、
+`storage_block_size` 是 UCM（或其他缓存系统）自己叠加的数据语义，不属于模型
+描述。如需 UCM 视角的规格表行，显式开启投影视图：
+
+```bash
+fake-model-weights <model> --layers 8 --out ./out --ucm-view
+# layer_plan.json 里会多出 "ucm_spec_table": [{group_name, kind, seed, ...}]
+```
+
+任何缓存系统（vLLM 原生 / LMCache / Mooncake / UCM …）都可以基于中立的
+`attention_groups` 自行映射，工具本身不绑定实现。
+
 ## 与 vllm-ascend 对接的注意点（实战踩坑记录）
 
 1. **量化配置需剥离**：官方 config 常带 `quantization_config`（如 DSV4 的 FP8），
