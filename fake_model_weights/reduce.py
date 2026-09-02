@@ -31,6 +31,13 @@ KV_SHAPE_KEYS = (
     "rotary_dim",
     "headwise_attn_output_gate",
     "partial_rotary_factor",
+    # Qwen3.5/GDN 线性注意力参数
+    "attn_output_gate",
+    "linear_conv_kernel_dim",
+    "linear_key_head_dim",
+    "linear_num_key_heads",
+    "linear_value_head_dim",
+    "linear_num_value_heads",
 )
 
 # 可安全缩小的非 KV 字段(默认缩小,省 dummy 权重显存)。
@@ -38,6 +45,7 @@ FFN_SHRINK: Dict[str, Dict[str, int]] = {
     "deepseek-v4": {"moe_intermediate_size": 64, "n_routed_experts": 4},
     "kimi-k3": {"moe_intermediate_size": 64, "num_experts": 4},
     "glm-5.3": {"moe_intermediate_size": 64, "n_routed_experts": 4},
+    "qwen3_5": {"moe_intermediate_size": 64, "n_routed_experts": 4},
 }
 FFN_SHRINK["generic"] = {"intermediate_size": 64}
 
@@ -59,6 +67,7 @@ def _clamp_ffn_consistency(c: Dict[str, Any], model_key: str) -> None:
         "deepseek-v4": ("num_experts_per_tok", "n_routed_experts"),
         "kimi-k3": ("num_experts_per_token", "num_experts"),
         "glm-5.3": ("num_experts_per_tok", "n_routed_experts"),
+        "qwen3_5": ("num_experts_per_tok", "n_routed_experts"),
     }
     per_tok, routed = pairs.get(model_key, (None, None))
     cfg = c if model_key == "deepseek-v4" else text_config(c)

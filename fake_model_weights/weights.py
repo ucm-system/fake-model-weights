@@ -40,12 +40,14 @@ def _default_dtype(cfg: Dict[str, Any]) -> str:
 
 
 def build_manifest(
-    plan: Dict[str, Any], reduced_config: Dict[str, Any]
+    plan: Dict[str, Any], reduced_config: Dict[str, Any], no_ffn: bool = False
 ) -> List[Dict[str, Any]]:
     """按 layer_plan + 缩减 config 生成 (name, shape, dtype) 清单。
 
     自定义架构(full/mla/csa/kda/dsa)的参数名遵循 HF 风格启发式清单;
     llama/qwen 等标准架构使用标准命名,可直接被 vllm --load-format safetensors 读取。
+    ``no_ffn=True`` 时跳过 MLP/专家权重,只保留 attention/KV 相关张量
+    (纯 attention 层;结构验证用)。
     """
     cfg = text_config(reduced_config)
     model_key = plan["model_key"]
@@ -137,8 +139,8 @@ def build_manifest(
             add(L(f"layers.{i}.linear_attn.v_proj.weight"), hidden, hidden)
             add(L(f"layers.{i}.linear_attn.o_proj.weight"), hidden, hidden)
 
-        # MLP(MoE 或 dense)
-        if n_routed and moe_inter:
+        # MLP(MoE 或 dense);--no-ffn 时跳过(纯 attention 层)。
+        if not no_ffn and n_routed and moe_inter:
             add(L(f"layers.{i}.mlp.gate.weight"), n_routed, hidden)
             add(
                 L(f"layers.{i}.mlp.experts.gate_up_proj.weight"),
@@ -163,7 +165,7 @@ def build_manifest(
                     n_shared * moe_inter,
                     hidden,
                 )
-        else:
+        elif not no_ffn:
             inter_ = inter or moe_inter or 256
             add(L(f"layers.{i}.mlp.gate_proj.weight"), inter_, hidden)
             add(L(f"layers.{i}.mlp.up_proj.weight"), inter_, hidden)

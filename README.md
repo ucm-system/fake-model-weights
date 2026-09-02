@@ -76,6 +76,9 @@ fake-model-weights MODEL \
 - `--layers N`：保留前 N 层（默认 8）。**只砍层数，KV 形状不动。**
 - `--list-layers`：只打印层计划（研究模式），不落文件。
 - `--weights safetensors`：生成随机权重文件（分片 + index.json）。
+- `--no-ffn`：权重清单只含 attention/KV 相关张量，**不含 MLP/专家权重**
+  （“纯 attention 层”）；用于只验 KV 结构的场景（vllm 主路径仍建议
+  `--load-format dummy`）。
 - `--torch`：用 torch 生成（正态分布，shape/dtype 标准）；缺 torch 时用
   纯 stdlib 确定性随机字节。
 - `--verify`：写出后读回校验（offset 对齐 / 张量数 / 可选 torch 加载）。
@@ -104,6 +107,7 @@ vllm serve ./dsv4-8l --load-format dummy \
 | `deepseek-v4` | [deepseek-ai/DeepSeek-V4-Flash-0731](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731) | 43 | `full,full,csa_c4,csa_c128,csa_c4,csa_c128,csa_c4,csa_c128` |
 | `kimi-k3` | [moonshotai/Kimi-K3](https://huggingface.co/moonshotai/Kimi-K3) | 93 | `mla,kda,kda,kda,mla,kda,kda,kda` |
 | `glm-5.3` | [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) | 45 | `kda,kda,kda,dsa,kda,kda,kda,dsa` |
+| `qwen3_5` | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) 等 | 64 | `kda,kda,kda,full,kda,kda,kda,full` |
 
 自动化识别 `model_key`：架构名含 DeepSeek / `compress_ratios` → `deepseek-v4`；
 Kimi/K3 → `kimi-k3`；GLM/Bailing → `glm-5.3`；其余 → `generic`（全层按 full 处理）。

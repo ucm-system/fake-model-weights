@@ -102,6 +102,22 @@ class LayerPlanTest(unittest.TestCase):
         self.assertEqual(by["indexer"]["kind"], lp.KIND_SIDECAR)
         self.assertEqual(by["swa"]["sliding_window"], 128)
 
+    def test_qwen36_pattern(self):
+        cfg = _load("qwen3.6-27b.json")
+        self.assertEqual(cli._detect_model_key(cfg), "qwen3_5")
+        kinds = lp.layer_types("qwen3_5", cfg)
+        self.assertEqual(len(kinds), 64)
+        # linear_attention x3 + full_attention x1 循环
+        self.assertEqual(
+            kinds[:8], ["kda", "kda", "kda", "full", "kda", "kda", "kda", "full"]
+        )
+        self.assertEqual(
+            lp.type_string("qwen3_5", cfg, 8),
+            "kda,kda,kda,full,kda,kda,kda,full",
+        )
+        names = {g["name"] for g in lp.kv_group_plan("qwen3_5", cfg)}
+        self.assertGreaterEqual(names, {"full", "kda"})
+
     def test_generic_all_full(self):
         cfg = {
             "model_type": "llama",
@@ -163,6 +179,15 @@ class WeightsTest(unittest.TestCase):
         for item in m:
             self.assertGreater(item["shape"][0], 0)
             self.assertIn(item["dtype"], ("F32", "F16", "BF16", "I8", "U8"))
+
+    def test_no_ffn_manifest_excludes_mlp(self):
+        full = wd.build_manifest(self.plan, self.reduced)
+        no_ffn = wd.build_manifest(self.plan, self.reduced, no_ffn=True)
+        self.assertLess(len(no_ffn), len(full))
+        self.assertTrue(any("mlp" in it["name"] for it in full))
+        self.assertFalse(any("mlp" in it["name"] for it in no_ffn))
+        # attention/KV 相关张量仍然齐全
+        self.assertTrue(any("self_attn" in it["name"] for it in no_ffn))
 
     def test_write_and_readback_stdlib(self):
         with tempfile.TemporaryDirectory() as d:

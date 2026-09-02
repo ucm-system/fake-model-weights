@@ -13,6 +13,7 @@ KNOWN_OFFICIAL_REPOS = {
     "deepseek-v4": "deepseek-ai/DeepSeek-V4-Flash-0731",
     "kimi-k3": "moonshotai/Kimi-K3",
     "glm-5.3": "zai-org/GLM-5.3-Flash",
+    "qwen3_5": "Qwen/Qwen3.6-27B",
 }
 
 # 同步拉取时仅需的模型描述文件(权重文件不拉)。

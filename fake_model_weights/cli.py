@@ -44,6 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--shrink-vocab", type=int, default=0, help="把词表缩到该值(>0 时,省 dummy 权重显存;默认不缩)"
     )
     p.add_argument("--drop-vision", action="store_true", help="多模态模型去掉 vision_config")
+    p.add_argument(
+        "--no-ffn",
+        action="store_true",
+        help="权重清单只含 attention/KV 相关张量,不含 MLP/专家权重"
+        "(纯 attention 层;结构验证用;vllm 主路径仍建议 --load-format dummy)",
+    )
     p.add_argument("--out", default=None, help="输出目录(默认 fake-model-<out>/ 于当前目录)")
     p.add_argument(
         "--weights",
@@ -129,7 +135,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 6) 可选: 生成 safetensors 权重
     files: List[str] = []
     if args.weights == "safetensors":
-        manifest = build_manifest(plan, reduced)
+        manifest = build_manifest(plan, reduced, no_ffn=args.no_ffn)
         files = write_safetensors(
             manifest,
             out,
@@ -179,8 +185,10 @@ def _detect_model_key(cfg: dict) -> str:
         return "deepseek-v4"
     if any("kimi" in a or "k3" in a for a in arches):
         return "kimi-k3"
-    if any("glm" in a or "bailing" in a for a in arches):
+    if any("glm" in a for a in arches) or any("bailing" in a for a in arches):
         return "glm-5.3"
+    if any("qwen3_5" in a for a in arches) or mtype.startswith("qwen3_5"):
+        return "qwen3_5"
     return "generic"
 
 
